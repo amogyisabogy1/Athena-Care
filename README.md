@@ -1,6 +1,6 @@
 # Hospital Insurance Claims Denial Prediction
 
-This project uses XGBoost to predict which hospitals are likely to have insurance claims denied based on NPPES (National Plan and Provider Enumeration System) data.
+This project uses XGBoost to predict which hospitals are likely to have insurance claims denied based on NPPES (National Plan and Provider Enumeration System) data. This helps emerging healthcare startups with planning and revenue management. 
 
 ## Overview
 
@@ -33,7 +33,6 @@ Athena-Care/
 
 1. Install dependencies:
 ```bash
-pip install -r requirements.txt
 ```
 
 2. Ensure NPPES data is accessible (update path in `src/data_processing.py`)
