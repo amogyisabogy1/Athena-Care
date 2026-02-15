@@ -36,6 +36,8 @@ data/
 # Models
 models/
 !models/.gitkeep
+!models/checkpoints/
+!models/checkpoints/*.json
 
 # Results
 results/
