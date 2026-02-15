@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Bell,
@@ -77,6 +77,82 @@ const kpiDeltaBadge = (delta: number) => {
   );
 };
 
+// ---- XGBoost model meta (from your JSON export) ----
+const MODEL_META = {
+  name: "xgboost-denial-risk",
+  best_iteration: 71,
+  best_score_auc: 0.6945684122189337,
+  feature_names: [
+    "Provider Organization Name (Legal Business Name)_complete",
+    "Employer Identification Number (EIN)_complete",
+    "Provider First Line Business Practice Location Address_complete",
+    "Provider Business Practice Location Address City Name_complete",
+    "Provider Business Practice Location Address State Name_complete",
+    "Provider Business Practice Location Address Postal Code_complete",
+    "Provider Business Practice Location Address Telephone Number_complete",
+    "Healthcare Provider Taxonomy Code_1_complete",
+    "Provider License Number_1_complete",
+    "Provider License Number State Code_1_complete",
+    "data_completeness_score",
+    "data_completeness_score.1",
+    "missing_critical_fields",
+    "num_taxonomy_codes",
+    "hospital_type",
+    "num_licenses",
+    "has_primary_license",
+    "license_state_match",
+    "days_since_enumeration",
+    "days_since_update",
+    "recently_updated",
+    "is_subpart",
+    "has_parent_org",
+    "state",
+    "region",
+  ],
+} as const;
+
+// Recommended production setup: host XGBoost behind an API and call it here.
+// POST /api/predict should return:
+//   { provider_key: string, denial_probability: number, top_factors?: {feature:string,impact:number}[] }
+async function predictDenialRisk(payload: {
+  provider_key: string;
+  features: Record<string, number>;
+}) {
+  const res = await fetch("/api/predict", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: MODEL_META.name,
+      best_iteration: MODEL_META.best_iteration,
+      provider_key: payload.provider_key,
+      features: payload.features,
+    }),
+  });
+  if (!res.ok) throw new Error(`Predict failed: ${res.status}`);
+  return (await res.json()) as {
+    provider_key: string;
+    denial_probability: number;
+    top_factors?: { feature: string; impact: number }[];
+  };
+}
+
+function normalizeFeaturesForModel(features: Record<string, number>) {
+  const out: Record<string, number> = {};
+  for (const f of MODEL_META.feature_names) out[f] = features[f] ?? 0;
+  return out;
+}
+
+function probToRiskScore(p: number) {
+  const clamped = Math.min(0.999, Math.max(0.001, p));
+  return Math.round((1 - clamped) * 100);
+}
+
+function riskLabelFromProb(p: number) {
+  if (p >= 0.35) return { label: "High", variant: "destructive" as const };
+  if (p >= 0.22) return { label: "Moderate", variant: "outline" as const };
+  return { label: "Low", variant: "secondary" as const };
+}
+
 const MOCK_FORECAST = [
   { m: "Mar", denial: 0.18, predicted: 0.19 },
   { m: "Apr", denial: 0.19, predicted: 0.205 },
@@ -90,46 +166,186 @@ const MOCK_FORECAST = [
 
 const MOCK_PROVIDERS = [
   {
+    key: "st-meridian",
     name: "St. Meridian Medical Center",
     city: "San Jose, CA",
     specialty: "Cardiology",
     score: 83,
     denialRate: 0.17,
     predicted6m: 0.19,
+    features: {
+      "Provider Organization Name (Legal Business Name)_complete": 1,
+      "Employer Identification Number (EIN)_complete": 1,
+      "Provider First Line Business Practice Location Address_complete": 1,
+      "Provider Business Practice Location Address City Name_complete": 1,
+      "Provider Business Practice Location Address State Name_complete": 1,
+      "Provider Business Practice Location Address Postal Code_complete": 1,
+      "Provider Business Practice Location Address Telephone Number_complete": 1,
+      "Healthcare Provider Taxonomy Code_1_complete": 1,
+      "Provider License Number_1_complete": 1,
+      "Provider License Number State Code_1_complete": 1,
+      data_completeness_score: 0.96,
+      "data_completeness_score.1": 0.94,
+      missing_critical_fields: 0,
+      num_taxonomy_codes: 2,
+      hospital_type: 2,
+      num_licenses: 3,
+      has_primary_license: 1,
+      license_state_match: 1,
+      days_since_enumeration: 3400,
+      days_since_update: 18,
+      recently_updated: 1,
+      is_subpart: 0,
+      has_parent_org: 1,
+      state: 6,
+      region: 4,
+    } as Record<string, number>,
   },
   {
+    key: "riverside-regional",
     name: "Riverside Regional Hospital",
     city: "Riverside, CA",
     specialty: "Orthopedics",
     score: 62,
     denialRate: 0.22,
     predicted6m: 0.27,
+    features: {
+      "Provider Organization Name (Legal Business Name)_complete": 1,
+      "Employer Identification Number (EIN)_complete": 1,
+      "Provider First Line Business Practice Location Address_complete": 1,
+      "Provider Business Practice Location Address City Name_complete": 1,
+      "Provider Business Practice Location Address State Name_complete": 1,
+      "Provider Business Practice Location Address Postal Code_complete": 1,
+      "Provider Business Practice Location Address Telephone Number_complete": 1,
+      "Healthcare Provider Taxonomy Code_1_complete": 1,
+      "Provider License Number_1_complete": 1,
+      "Provider License Number State Code_1_complete": 1,
+      data_completeness_score: 0.82,
+      "data_completeness_score.1": 0.79,
+      missing_critical_fields: 1,
+      num_taxonomy_codes: 1,
+      hospital_type: 2,
+      num_licenses: 2,
+      has_primary_license: 1,
+      license_state_match: 1,
+      days_since_enumeration: 5100,
+      days_since_update: 220,
+      recently_updated: 0,
+      is_subpart: 0,
+      has_parent_org: 1,
+      state: 6,
+      region: 4,
+    } as Record<string, number>,
   },
   {
+    key: "bayview-childrens",
     name: "Bayview Children’s",
     city: "Oakland, CA",
     specialty: "Pediatrics",
     score: 78,
     denialRate: 0.19,
     predicted6m: 0.21,
+    features: {
+      "Provider Organization Name (Legal Business Name)_complete": 1,
+      "Employer Identification Number (EIN)_complete": 0,
+      "Provider First Line Business Practice Location Address_complete": 1,
+      "Provider Business Practice Location Address City Name_complete": 1,
+      "Provider Business Practice Location Address State Name_complete": 1,
+      "Provider Business Practice Location Address Postal Code_complete": 1,
+      "Provider Business Practice Location Address Telephone Number_complete": 1,
+      "Healthcare Provider Taxonomy Code_1_complete": 1,
+      "Provider License Number_1_complete": 1,
+      "Provider License Number State Code_1_complete": 1,
+      data_completeness_score: 0.90,
+      "data_completeness_score.1": 0.88,
+      missing_critical_fields: 0,
+      num_taxonomy_codes: 2,
+      hospital_type: 1,
+      num_licenses: 2,
+      has_primary_license: 1,
+      license_state_match: 1,
+      days_since_enumeration: 2800,
+      days_since_update: 44,
+      recently_updated: 1,
+      is_subpart: 0,
+      has_parent_org: 0,
+      state: 6,
+      region: 4,
+    } as Record<string, number>,
   },
   {
+    key: "sierra-valley",
     name: "Sierra Valley Clinic Network",
     city: "Fresno, CA",
     specialty: "Primary Care",
     score: 49,
     denialRate: 0.28,
     predicted6m: 0.33,
+    features: {
+      "Provider Organization Name (Legal Business Name)_complete": 1,
+      "Employer Identification Number (EIN)_complete": 0,
+      "Provider First Line Business Practice Location Address_complete": 0,
+      "Provider Business Practice Location Address City Name_complete": 1,
+      "Provider Business Practice Location Address State Name_complete": 1,
+      "Provider Business Practice Location Address Postal Code_complete": 0,
+      "Provider Business Practice Location Address Telephone Number_complete": 0,
+      "Healthcare Provider Taxonomy Code_1_complete": 1,
+      "Provider License Number_1_complete": 0,
+      "Provider License Number State Code_1_complete": 0,
+      data_completeness_score: 0.55,
+      "data_completeness_score.1": 0.52,
+      missing_critical_fields: 3,
+      num_taxonomy_codes: 1,
+      hospital_type: 0,
+      num_licenses: 0,
+      has_primary_license: 0,
+      license_state_match: 0,
+      days_since_enumeration: 1900,
+      days_since_update: 520,
+      recently_updated: 0,
+      is_subpart: 1,
+      has_parent_org: 0,
+      state: 6,
+      region: 4,
+    } as Record<string, number>,
   },
   {
+    key: "northgate-oncology",
     name: "Northgate Oncology Institute",
     city: "Sacramento, CA",
     specialty: "Oncology",
     score: 71,
     denialRate: 0.21,
     predicted6m: 0.24,
+    features: {
+      "Provider Organization Name (Legal Business Name)_complete": 1,
+      "Employer Identification Number (EIN)_complete": 1,
+      "Provider First Line Business Practice Location Address_complete": 1,
+      "Provider Business Practice Location Address City Name_complete": 1,
+      "Provider Business Practice Location Address State Name_complete": 1,
+      "Provider Business Practice Location Address Postal Code_complete": 1,
+      "Provider Business Practice Location Address Telephone Number_complete": 1,
+      "Healthcare Provider Taxonomy Code_1_complete": 1,
+      "Provider License Number_1_complete": 1,
+      "Provider License Number State Code_1_complete": 1,
+      data_completeness_score: 0.86,
+      "data_completeness_score.1": 0.84,
+      missing_critical_fields: 0,
+      num_taxonomy_codes: 2,
+      hospital_type: 1,
+      num_licenses: 1,
+      has_primary_license: 1,
+      license_state_match: 1,
+      days_since_enumeration: 4100,
+      days_since_update: 120,
+      recently_updated: 0,
+      is_subpart: 0,
+      has_parent_org: 1,
+      state: 6,
+      region: 4,
+    } as Record<string, number>,
   },
-];
+] as const;
 
 const MOCK_ALERTS = [
   {
@@ -251,6 +467,13 @@ function ChartTooltip({ active, payload, label }: any) {
 }
 
 export default function HealthScoreAIDashboard() {
+  const [modelEnabled, setModelEnabled] = useState(true);
+  const [predByKey, setPredByKey] = useState<Record<
+    string,
+    { denial_probability: number; top_factors?: { feature: string; impact: number }[] }
+  >>({});
+  const [predictError, setPredictError] = useState<string | null>(null);
+
   const [tab, setTab] = useState<"overview" | "network">("overview");
   const [query, setQuery] = useState("");
   const [region, setRegion] = useState("United States");
@@ -266,16 +489,74 @@ export default function HealthScoreAIDashboard() {
     );
   }, [query]);
 
+  // Run predictions (via /api/predict) for providers shown in the dashboard.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function run() {
+      if (!modelEnabled) return;
+      setPredictError(null);
+
+      const todo = filteredProviders.filter((p) => predByKey[p.key] == null);
+      if (!todo.length) return;
+
+      try {
+        const results = await Promise.all(
+          todo.map((p) =>
+            predictDenialRisk({
+              provider_key: p.key,
+              features: normalizeFeaturesForModel(p.features as any),
+            })
+          )
+        );
+        if (cancelled) return;
+        setPredByKey((prev) => {
+          const next = { ...prev };
+          for (const r of results) {
+            next[r.provider_key] = {
+              denial_probability: r.denial_probability,
+              top_factors: r.top_factors,
+            };
+          }
+          return next;
+        });
+      } catch {
+        if (cancelled) return;
+        setPredictError(
+          "Model predictions unavailable. Implement POST /api/predict to return { provider_key, denial_probability, top_factors? }."
+        );
+      }
+    }
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [filteredProviders, modelEnabled, predByKey]);
+
+
   // Example KPIs (mock)
   const avgScore = useMemo(() => {
+    // If model predictions exist, compute from model-derived score.
+    const preds = Object.values(predByKey);
+    if (modelEnabled && preds.length) {
+      const scores = preds.map((p) => probToRiskScore(p.denial_probability));
+      return Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+    }
+
+    // Fallback to static score.
     const arr = MOCK_PROVIDERS.map((p) => p.score);
     return Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
-  }, []);
+  }, [predByKey, modelEnabled]);
 
-  const highRiskCount = useMemo(
-    () => MOCK_PROVIDERS.filter((p) => p.score < 50).length,
-    []
-  );
+
+  const highRiskCount = useMemo(() => {
+    if (modelEnabled && Object.keys(predByKey).length) {
+      return Object.values(predByKey).filter((p) => p.denial_probability >= 0.35)
+        .length;
+    }
+    return MOCK_PROVIDERS.filter((p) => p.score < 50).length;
+  }, [predByKey, modelEnabled]);
 
   const predictedSpike = 14.0; // percent points, mock
 
@@ -410,6 +691,21 @@ export default function HealthScoreAIDashboard() {
                     Filters
                   </Button>
 
+                  <Button
+                    variant={modelEnabled ? "secondary" : "outline"}
+                    className={
+                      "h-10 rounded-2xl " +
+                      (modelEnabled
+                        ? "bg-white/10 hover:bg-white/15"
+                        : "border-white/10 bg-transparent text-white hover:bg-white/5")
+                    }
+                    onClick={() => setModelEnabled((v) => !v)}
+                    title="Toggle XGBoost model-driven scoring"
+                  >
+                    <Sparkles className="h-4 w-4 mr-2" />
+                    Model {modelEnabled ? "On" : "Off"}
+                  </Button>
+
                   <Button className="h-10 rounded-2xl">
                     <Download className="h-4 w-4 mr-2" />
                     Export
@@ -512,7 +808,7 @@ export default function HealthScoreAIDashboard() {
                   <CardTitle className="text-sm font-medium text-white/80 flex items-center justify-between">
                     <span>Denial Rate Forecast (6–12 months)</span>
                     <Badge variant="outline" className="border-white/10 text-white/80">
-                      Model: v0.9
+                      XGBoost • best_iter {MODEL_META.best_iteration} • AUC {MODEL_META.best_score_auc.toFixed(3)}
                     </Badge>
                   </CardTitle>
                 </CardHeader>
@@ -594,6 +890,12 @@ export default function HealthScoreAIDashboard() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
+                  {predictError && (
+                    <div className="rounded-2xl border border-white/10 bg-black/20 p-3 text-xs text-white/70">
+                      <div className="font-medium mb-1">Model integration</div>
+                      <div className="text-white/60">{predictError}</div>
+                    </div>
+                  )}
                   {MOCK_ALERTS.map((a, idx) => {
                     const sev = a.severity;
                     const badgeVariant =
@@ -679,6 +981,9 @@ export default function HealthScoreAIDashboard() {
                           <TableHead className="text-white/60">Specialty</TableHead>
                           <TableHead className="text-white/60">Risk</TableHead>
                           <TableHead className="text-white/60 text-right">
+                            Model p(denial)
+                          </TableHead>
+                          <TableHead className="text-white/60 text-right">
                             Denial
                           </TableHead>
                           <TableHead className="text-white/60 text-right">
@@ -688,7 +993,10 @@ export default function HealthScoreAIDashboard() {
                       </TableHeader>
                       <TableBody>
                         {filteredProviders.map((p) => {
-                          const rb = riskBadge(p.score);
+                          const pred = predByKey[p.key];
+                          const modelProb = modelEnabled && pred ? pred.denial_probability : null;
+                          const modelRisk = modelProb != null ? probToRiskScore(modelProb) : null;
+                          const rb = modelProb != null ? riskLabelFromProb(modelProb) : riskBadge(p.score);
                           return (
                             <TableRow
                               key={p.name}
@@ -705,9 +1013,20 @@ export default function HealthScoreAIDashboard() {
                                 <div className="flex items-center gap-2">
                                   <Badge variant={rb.variant}>{rb.label}</Badge>
                                   <span className="text-sm text-white/80">
-                                    {p.score}/100
+                                    {(modelRisk ?? p.score)}/100
                                   </span>
                                 </div>
+                                {modelEnabled && pred?.top_factors?.length ? (
+                                  <div className="mt-1 text-[11px] text-white/50">
+                                    Top factors: {pred.top_factors
+                                      .slice(0, 2)
+                                      .map((f) => f.feature)
+                                      .join(", ")}
+                                  </div>
+                                ) : null}
+                              </TableCell>
+                              <TableCell className="text-right text-white/80">
+                                {modelProb != null ? formatPct(modelProb) : "—"}
                               </TableCell>
                               <TableCell className="text-right text-white/80">
                                 {formatPct(p.denialRate)}
