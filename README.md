@@ -65,13 +65,9 @@ Athena-Care/
 
 ### Installation
 
-1. Install dependencies:
-```bash
-```
+1. Ensure NPPES data is accessible (update path in `src/data_processing.py`)
 
-2. Ensure NPPES data is accessible (update path in `src/data_processing.py`)
-
-3. Run the pipeline:
+2. Run the pipeline:
 ```bash
 python src/data_processing.py
 python src/feature_engineering.py
